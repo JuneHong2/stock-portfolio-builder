@@ -1,0 +1,6 @@
+streamlit
+anthropic
+yfinance
+pandas
+langgraph
+langchain-core
