@@ -17,17 +17,110 @@ from data_sources import fetch_company_detail, fetch_price_history
 st.set_page_config(page_title="안정형 포트폴리오 빌더", layout="wide")
 
 
+# ─────────────────────────────────────────────────────────────
+# 전역 스타일 - 폰트, 색, 버튼/카드 톤
+# ─────────────────────────────────────────────────────────────
+st.markdown(
+    """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'IBM Plex Sans', -apple-system, sans-serif;
+}
+
+[data-testid="stAppViewContainer"] {
+    background:
+        radial-gradient(ellipse 900px 500px at 50% -8%, rgba(124,111,255,0.14), transparent 60%),
+        linear-gradient(180deg, #08080F 0%, #0A0A16 100%);
+}
+
+h1, h2, h3 {
+    font-family: 'Space Grotesk', sans-serif !important;
+    letter-spacing: -0.01em;
+}
+
+.hero-eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.8rem;
+    color: #8A8AA3;
+    margin-bottom: 0.3rem;
+}
+
+.hero-title {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 2.1rem;
+    font-weight: 600;
+    color: #E8E8F5;
+    margin-bottom: 0.2rem;
+}
+
+.hero-sub {
+    color: #8A8AA3;
+    font-size: 0.98rem;
+    margin-bottom: 1.6rem;
+}
+
+.section-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.78rem;
+    color: #7C6FFF;
+    letter-spacing: 0.03em;
+    margin: 0.9rem 0 0.4rem 0;
+}
+
+/* 숫자 지표는 고정폭 폰트로 - 데이터 터미널 느낌 */
+[data-testid="stMetricValue"] {
+    font-family: 'IBM Plex Mono', monospace !important;
+    color: #E8E8F5 !important;
+}
+[data-testid="stMetricLabel"] {
+    color: #8A8AA3 !important;
+}
+
+/* 기본 CTA 버튼 - 유일하게 강조색을 쓰는 지점 */
+[data-testid="stBaseButton-primary"] {
+    background: linear-gradient(135deg, #7C6FFF 0%, #4EA1FF 100%) !important;
+    border: none !important;
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+    box-shadow: 0 0 22px rgba(124,111,255,0.30);
+    transition: box-shadow 0.2s ease, transform 0.15s ease;
+}
+[data-testid="stBaseButton-primary"]:hover {
+    box-shadow: 0 0 30px rgba(124,111,255,0.50);
+    transform: translateY(-1px);
+}
+
+/* 카드(테두리 있는 container)와 expander를 같은 톤으로 통일 */
+[data-testid="stExpander"] {
+    border: 1px solid rgba(124,111,255,0.14) !important;
+    border-radius: 10px !important;
+    background: rgba(18,18,36,0.5);
+}
+
+[data-testid="stTabs"] {
+    margin-top: 0.4rem;
+}
+
+hr {
+    border-color: rgba(124,111,255,0.12) !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+
 def _check_password() -> bool:
     """온라인에 배포했을 때 아무나 못 누르게 막는 간단한 비밀번호 게이트.
 
     Streamlit Cloud의 Secrets에 APP_PASSWORD를 설정하면 그때부터 활성화됩니다.
-    로컬 컴퓨터에서 그냥 실행할 때는 secrets 자체가 없으니 이 게이트를 건너뜁니다
-    (본인 컴퓨터에서만 도는 거라 안전).
+    로컬 컴퓨터에서 그냥 실행할 때는 secrets 자체가 없으니 이 게이트를 건너뜁니다.
     """
     try:
         password_required = "APP_PASSWORD" in st.secrets
     except Exception:
-        # secrets.toml 자체가 없는 로컬 실행 환경 - 비밀번호 없이 통과시킵니다.
         password_required = False
 
     if not password_required:
@@ -36,7 +129,7 @@ def _check_password() -> bool:
     if st.session_state.get("_authenticated"):
         return True
 
-    st.title("🔒 접속 확인")
+    st.markdown('<div class="hero-title">접속 확인</div>', unsafe_allow_html=True)
     pw = st.text_input("비밀번호를 입력하세요", type="password")
     if pw:
         if pw == st.secrets["APP_PASSWORD"]:
@@ -50,37 +143,46 @@ def _check_password() -> bool:
 if not _check_password():
     st.stop()
 
-st.title("📊 안정형 포트폴리오 빌더")
-st.caption(
-    "섹터를 지정하면 Claude가 실제로 웹 검색해 종목을 찾고, "
-    "안정성·밸류에이션 기준으로 걸러 포트폴리오를 구성합니다."
+
+# ─────────────────────────────────────────────────────────────
+# 헤더
+# ─────────────────────────────────────────────────────────────
+st.markdown('<div class="hero-eyebrow">STABLE GROWTH PORTFOLIO PIPELINE</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero-title">안정형 포트폴리오 빌더</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="hero-sub">섹터를 지정하면 Claude가 실제로 웹 검색해 종목을 찾고, '
+    '안정성·밸류에이션 기준으로 걸러 포트폴리오를 구성합니다.</div>',
+    unsafe_allow_html=True,
 )
 
+
 # ─────────────────────────────────────────────────────────────
-# 사이드바: 설정
+# 조건 설정 패널 - 메인 화면 상단 (사이드바 아님)
 # ─────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.header("⚙️ 설정")
+with st.container(border=True):
+    st.markdown('<div class="section-label">TARGET</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns([2, 1])
+    sector = c1.text_input("관심 섹터", value="헬스케어", label_visibility="visible")
+    budget = c2.number_input("예산 ($)", min_value=1000, value=10_000, step=1000)
 
-    sector = st.text_input("관심 섹터", value="헬스케어")
-    budget = st.number_input("예산 ($)", min_value=1000, value=10_000, step=1000)
+    st.markdown('<div class="section-label">STABILITY CRITERIA</div>', unsafe_allow_html=True)
+    r1c1, r1c2 = st.columns(2)
+    min_holdings = r1c1.slider("최소 보유 종목 수", 1, 20, DEFAULT_LIMITS["min_holdings"])
+    max_beta = r1c2.slider("베타 상한", 0.5, 3.0, DEFAULT_LIMITS["max_beta"], step=0.1)
 
-    st.divider()
-    st.subheader("안정성 기준")
-    min_holdings = st.slider("최소 보유 종목 수", 1, 20, DEFAULT_LIMITS["min_holdings"])
-    max_beta = st.slider("베타 상한", 0.5, 3.0, DEFAULT_LIMITS["max_beta"], step=0.1)
-    min_growth_years = st.slider("최소 연속 이익성장 연수", 0, 5, DEFAULT_LIMITS["min_years_profit_growth"])
-    max_debt = st.slider("부채비율 상한", 0.1, 5.0, DEFAULT_LIMITS["max_debt_to_equity"], step=0.1)
+    r2c1, r2c2 = st.columns(2)
+    min_growth_years = r2c1.slider("최소 연속 이익성장 연수", 0, 5, DEFAULT_LIMITS["min_years_profit_growth"])
+    max_debt = r2c2.slider("부채비율 상한", 0.1, 5.0, DEFAULT_LIMITS["max_debt_to_equity"], step=0.1)
 
-    st.divider()
-    st.subheader("포트폴리오 구성 기준")
+    st.markdown('<div class="section-label">ALLOCATION</div>', unsafe_allow_html=True)
     max_single_weight = st.slider(
         "단일 종목 최대 비중", 0.05, 0.5, DEFAULT_LIMITS["max_single_stock_weight"], step=0.01
     )
 
-    st.divider()
-    run_button = st.button("🚀 포트폴리오 만들기", type="primary", width="stretch")
+    st.write("")
+    run_button = st.button("포트폴리오 만들기 →", type="primary", width="stretch")
     st.caption("한 번 실행에 웹 검색 + LLM 호출 비용이 발생합니다 (보통 몇 센트~수십 센트 수준).")
+
 
 if "result" not in st.session_state:
     st.session_state.result = None
@@ -122,12 +224,12 @@ if run_button:
 result = st.session_state.result
 
 if result is None:
-    st.info("왼쪽에서 섹터와 조건을 설정하고 '포트폴리오 만들기'를 눌러주세요.")
+    st.info("위에서 조건을 설정하고 '포트폴리오 만들기'를 눌러주세요.")
     st.stop()
 
 st.success(result["status"])
 
-tab1, tab2, tab3 = st.tabs(["1️⃣ 종목 발굴", "2️⃣ 안정성 필터링", "3️⃣ 최종 포트폴리오"])
+tab1, tab2, tab3 = st.tabs(["01 종목 발굴", "02 안정성 필터링", "03 최종 포트폴리오"])
 
 # ─────────────────────────────────────────────────────────────
 # 탭 1: 종목 발굴 (제안 vs 검증 통과/탈락)
@@ -142,7 +244,8 @@ with tab1:
     col2.metric("실제 검증 통과", len(passed1))
     col3.metric("검증 탈락", len(failed1))
 
-    st.subheader("✅ 검증 통과 (실제 존재 + 시가총액 기준 충족)")
+    st.subheader("검증 통과")
+    st.caption("실제 존재 + 시가총액 기준 충족")
     if passed1:
         df = pd.DataFrame([
             {
@@ -157,7 +260,8 @@ with tab1:
     else:
         st.write("없음")
 
-    st.subheader("❌ 검증 탈락 (지어낸 티커 또는 소형주)")
+    st.subheader("검증 탈락")
+    st.caption("지어낸 티커 또는 소형주")
     if failed1:
         df = pd.DataFrame([
             {"티커": a["ticker"], "회사명": a.get("company") or "-", "탈락 이유": a.get("reject_reason")}
@@ -179,8 +283,8 @@ with tab2:
     col2.metric("통과", len(passed2))
 
     for a in sorted(audit2, key=lambda x: not x["passed"]):
-        icon = "✅" if a["passed"] else "❌"
-        with st.expander(f"{icon} {a['ticker']}", expanded=False):
+        icon = "PASS" if a["passed"] else "FAIL"
+        with st.expander(f"{icon}  ·  {a['ticker']}", expanded=False):
             c1, c2, c3 = st.columns(3)
             c1.metric("베타", a.get("beta") if a.get("beta") is not None else "N/A")
             c2.metric("부채비율", a.get("debt_to_equity") if a.get("debt_to_equity") is not None else "N/A")
@@ -205,7 +309,7 @@ with tab3:
     if not portfolio:
         st.warning(
             "최소 보유 종목 수 조건을 만족하지 못해 포트폴리오가 구성되지 않았습니다. "
-            "왼쪽에서 '최소 보유 종목 수'를 낮추거나 섹터를 넓혀보세요."
+            "위에서 '최소 보유 종목 수'를 낮추거나 섹터를 넓혀보세요."
         )
     else:
         total_weight = sum(h.get("weight", 0) for h in portfolio)
@@ -219,12 +323,12 @@ with tab3:
         chart_df = pd.DataFrame(
             [{"티커": h["ticker"], "비중": h.get("weight", 0)} for h in portfolio]
         ).set_index("티커")
-        st.bar_chart(chart_df)
+        st.bar_chart(chart_df, color="#7C6FFF")
 
         st.subheader("종목별 상세")
         for h in sorted(portfolio, key=lambda x: -x.get("weight", 0)):
             ticker = h["ticker"]
-            with st.expander(f"{ticker} — 비중 {h.get('weight', 0) * 100:.1f}%", expanded=False):
+            with st.expander(f"{ticker}  ·  비중 {h.get('weight', 0) * 100:.1f}%", expanded=False):
                 try:
                     detail = fetch_company_detail(ticker)
                     history = fetch_price_history(ticker)
@@ -238,7 +342,7 @@ with tab3:
                     st.caption(f"{detail.get('sector')} · {detail.get('industry', '')}")
 
                 if not history.empty:
-                    st.line_chart(history["Close"])
+                    st.line_chart(history["Close"], color="#4EA1FF")
                 else:
                     st.caption("차트 데이터를 가져오지 못했습니다.")
 
@@ -256,11 +360,11 @@ with tab3:
                 roe = h.get("roe")
                 c4.metric("ROE", f"{roe * 100:.1f}%" if roe is not None else "N/A")
 
-                st.markdown("**✅ 안정성 통과 근거**")
+                st.markdown("**안정성 통과 근거**")
                 st.info(h.get("stability_rationale") or "-")
 
                 if detail.get("analyst_target_mean"):
-                    st.markdown("**📈 애널리스트 목표주가 컨센서스**")
+                    st.markdown("**애널리스트 목표주가 컨센서스**")
                     st.caption(
                         "Yahoo Finance가 집계한 제3자 애널리스트 의견입니다. "
                         "이 파이프라인이나 Claude가 만든 예측이 아니며, 실제 주가를 보장하지 않습니다."
@@ -273,18 +377,18 @@ with tab3:
                     )
 
                 if h.get("high_correlation_with"):
-                    st.markdown("**⚠️ 상관관계 주의**")
+                    st.markdown("**상관관계 주의**")
                     for c in h["high_correlation_with"]:
                         st.write(f"- {c['ticker']}와 상관계수 {c['correlation']} (함께 크게 움직이는 경향)")
 
         st.divider()
-        st.subheader("🔔 리밸런싱 / 손절 제안")
+        st.subheader("리밸런싱 / 손절 제안")
         actions = result.get("rebalance_actions", [])
         if actions:
             for a in actions:
                 action_label = {
                     "initial_buy": "최초 매수",
-                    "stop_loss_review": "⚠️ 손절 검토",
+                    "stop_loss_review": "손절 검토",
                     "trim": "비중 축소",
                     "add": "비중 확대",
                 }.get(a.get("action"), a.get("action"))
