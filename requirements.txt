@@ -4,3 +4,4 @@ yfinance
 pandas
 langgraph
 langchain-core
+snaptrade-python-sdk
