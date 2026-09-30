@@ -120,13 +120,10 @@ def fetch_wealthsimple_holdings() -> tuple[list[dict], list[dict]]:
                 continue
 
             ticker = _extract_ticker(pos)
-            units = pos.get("units")
-            cost_basis = pos.get("cost_basis")
+            units = _to_float(pos.get("units"))
+            cost_basis = _to_float(pos.get("cost_basis"))
 
             if not ticker or not units:
-                # 추측이 또 틀렸을 때를 대비해서, 원본 구조를 그대로 남겨둡니다.
-                # streamlit_app.py에서 이 raw_unparsed를 화면에 보여줘서
-                # 다음번엔 추측이 아니라 실제 구조를 보고 한 번에 고칠 수 있게 합니다.
                 unparsed.append({"account": account_label, "raw": pos})
                 continue
 
@@ -134,12 +131,26 @@ def fetch_wealthsimple_holdings() -> tuple[list[dict], list[dict]]:
 
             holdings.append({
                 "ticker": ticker,
-                "shares": float(units),
-                "entry_price": float(entry_price) if entry_price is not None else None,
+                "shares": units,
+                "entry_price": entry_price,
                 "account": account_label,
             })
 
     return holdings, unparsed
+
+
+def _to_float(value) -> float | None:
+    """SnapTrade가 숫자를 문자열로 줄 때가 있어서, 안전하게 float로 변환합니다."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _extract_ticker(pos: dict) -> str | None:
