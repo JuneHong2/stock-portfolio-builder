@@ -1,12 +1,5 @@
 """
 안정적 우상향(Quality Growth) 목표에 맞춘 주식 분석 에이전트 파이프라인.
-
-전체 흐름: 종목 발굴·검증 -> 안정성 필터링 -> 밸류에이션·리스크 분석
-          -> 포트폴리오 구성 -> 모니터링·리밸런싱
-
-각 단계는 실제로는 Claude API를 호출하는 에이전트지만, 이 골격에서는
-call_llm()이 플레이스홀더입니다. 실제 프롬프트/모델을 넣고 나서
-API 키를 연결하면 바로 동작하는 구조로 짰습니다.
 """
 
 from __future__ import annotations
@@ -30,82 +23,55 @@ from data_sources import (
 )
 
 
-# ---------------------------------------------------------------------------
-# 1. 모델 티어 설정
-#    - 실제 모델 문자열은 Anthropic 문서(docs.claude.com)에서 최신 값을 확인하세요.
-#    - 호출 빈도가 높은 단계는 저가/고속 모델, 종합 판단 단계는 최상위 모델을 씁니다.
-# ---------------------------------------------------------------------------
+MODEL_FAST = "claude-haiku-4-5-20251001"
+MODEL_MID = "claude-sonnet-5"
+MODEL_TOP = "claude-opus-5"
 
-MODEL_FAST = "claude-haiku-4-5-20251001"   # 대량 스캔, 티커 검증 등 고빈도 작업
-MODEL_MID = "claude-sonnet-5"              # 밸류에이션 해석, 재무 분석 등 중간 추론
-MODEL_TOP = "claude-opus-5"                # 리스크 종합, 배분, 최종 리밸런싱 판단
-
-
-# ---------------------------------------------------------------------------
-# 2. 안정성 기준값 - 여기 숫자들이 "안정적 우상향" 목표를 실제로 구현하는 부분입니다.
-#    프롬프트 안에 이 값을 그대로 박아 넣어서 에이전트가 임의로 완화하지 못하게 하세요.
-# ---------------------------------------------------------------------------
 
 class RiskLimits(TypedDict):
-    max_beta: float                 # 이 값을 넘는 종목은 안정성 필터에서 탈락
-    min_years_profit_growth: int    # 최소 연속 이익 성장 연수
-    max_debt_to_equity: float       # 부채비율 상한 (업종 평균 대비 배수)
-    max_single_stock_weight: float  # 단일 종목 최대 비중
-    max_single_sector_weight: float # 단일 섹터 최대 비중
-    min_holdings: int               # 최소 보유 종목 수
-    correlation_ceiling: float      # 이 상관계수 이상인 종목 쌍은 동시 편입 제한
-    stop_loss_pct: float            # 매수가 대비 이 비율 하락 시 즉시 재검토
-    min_market_cap: float           # 1단계 티커 스크리너 통과 기준 (중대형주 하한선)
+    max_beta: float
+    min_years_profit_growth: int
+    max_debt_to_equity: float
+    max_single_stock_weight: float
+    max_single_sector_weight: float
+    min_holdings: int
+    correlation_ceiling: float
+    stop_loss_pct: float
+    min_market_cap: float
 
 
 DEFAULT_LIMITS: RiskLimits = {
     "max_beta": 1.3,
     "min_years_profit_growth": 3,
-    "max_debt_to_equity": 1.0,          # 업종 평균 이하
+    "max_debt_to_equity": 1.0,
     "max_single_stock_weight": 0.10,
     "max_single_sector_weight": 0.25,
     "min_holdings": 12,
     "correlation_ceiling": 0.7,
     "stop_loss_pct": -0.15,
-    "min_market_cap": 10_000_000_000,   # 100억 달러 - 소형주/신생 산업 배제 기준
+    "min_market_cap": 10_000_000_000,
 }
 
 
-# ---------------------------------------------------------------------------
-# 3. 파이프라인 상태 정의
-#    LangGraph는 이 State 딕셔너리를 노드 간에 전달하며 계속 채워나갑니다.
-# ---------------------------------------------------------------------------
-
 class PortfolioState(TypedDict):
-    sector: str                      # 사용자가 지정한 관심 섹터
-    budget: float                    # 총 투자 예산
-    limits: RiskLimits               # 안정성/리스크 상한값
+    sector: str
+    budget: float
+    limits: RiskLimits
 
-    candidates: list[dict]           # 1단계: 발굴 + 티커 검증 통과 종목
-    stable_candidates: list[dict]    # 2단계: 안정성 필터 통과 종목
-    scored_candidates: list[dict]    # 3단계: 밸류에이션+리스크 스코어링 결과
-    portfolio: list[dict]            # 4단계: 최종 비중까지 정해진 포트폴리오
-    trade_plan: list[dict]           # 4단계: 분할 매수 주문 초안
+    candidates: list[dict]
+    stable_candidates: list[dict]
+    scored_candidates: list[dict]
+    portfolio: list[dict]
+    trade_plan: list[dict]
 
-    current_holdings: list[dict]     # 5단계 입력: 실제로 보유 중인 종목 (ticker, shares, entry_price)
-    rebalance_actions: list[dict]    # 5단계 출력: 리밸런싱/손절 제안
+    current_holdings: list[dict]
+    rebalance_actions: list[dict]
 
-    stage1_audit: list[dict]         # 1단계: 제안된 전체 종목 + 통과/탈락 사유 (UI용 감사 기록)
-    stage2_audit: list[dict]         # 2단계: 평가된 전체 종목 + 통과/탈락 사유 (UI용 감사 기록)
+    stage1_audit: list[dict]
+    stage2_audit: list[dict]
 
-    status: str                      # 파이프라인 진행 상태 메시지 (디버깅용)
+    status: str
 
-
-# ---------------------------------------------------------------------------
-# 4. call_llm은 llm_client.py에서 가져옵니다 (실제 Anthropic API 연결).
-#    사용 전 ANTHROPIC_API_KEY 환경변수를 설정하세요.
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# 5. 단계별 노드 함수
-#    각 함수는 "역할 하나만" 담당하고, 결과를 State에 채워서 돌려줍니다.
-# ---------------------------------------------------------------------------
 
 _SECTOR_DISCOVERY_SYSTEM_PROMPT = """너는 보수적인 주식 리서처다. 웹 검색으로 실제 정보를 확인한 뒤,
 주어진 섹터에서 실제로 존재하고 미국 또는 주요 거래소에 상장된 중대형주만 후보로 제시하라.
@@ -122,7 +88,6 @@ _SECTOR_DISCOVERY_SYSTEM_PROMPT = """너는 보수적인 주식 리서처다. �
 
 
 def _extract_json_list(text: str) -> list[dict]:
-    """LLM 응답 텍스트에서 마지막 JSON 코드블록(또는 JSON 배열)을 찾아 파싱합니다."""
     matches = re.findall(r"```json\s*(\[.*?\])\s*```", text, re.DOTALL)
     if not matches:
         matches = re.findall(r"(\[\s*\{.*?\}\s*\])", text, re.DOTALL)
@@ -132,16 +97,7 @@ def _extract_json_list(text: str) -> list[dict]:
 
 
 def sector_researcher_and_screener(state: PortfolioState) -> PortfolioState:
-    """1단계: 섹터 리서처 + 티커 스크리너. 중대형주 위주 후보군 발굴.
-
-    1) Claude에게 웹 검색 도구를 주고 지정 섹터의 실제 중대형주 후보를 찾게 합니다.
-    2) LLM이 준 티커를 그대로 믿지 않고, yfinance로 실제 존재 여부와 시가총액을
-       재검증합니다 - 최종 통과/탈락 판단은 항상 실제 데이터가 내립니다.
-
-    run_local.py에서 candidates를 미리 채워 넘기면(빠른 반복 테스트용) 이 웹 검색을
-    건너뛰고 그 값을 그대로 씁니다. 실제 자동 발굴을 보려면 run_local.py의
-    CANDIDATE_TICKERS를 비워두세요.
-    """
+    """1단계: 섹터 리서처 + 티커 스크리너."""
     if state.get("candidates"):
         state["stage1_audit"] = [
             {"ticker": c["ticker"], "company": c.get("company"), "market_cap": c.get("market_cap"),
@@ -163,7 +119,6 @@ def sector_researcher_and_screener(state: PortfolioState) -> PortfolioState:
         )
         proposed = _extract_json_list(raw_response)
     except Exception as e:
-        # 웹 검색/파싱이 실패해도 전체 파이프라인이 죽지 않게, 빈 후보로 안전하게 넘어갑니다.
         state["candidates"] = []
         state["stage1_audit"] = []
         state["status"] = f"1단계 실패: 섹터 리서치 오류로 후보 0종목 ({e})"
@@ -207,20 +162,11 @@ _RATIONALE_SCHEMA = {
 
 
 def stability_screener(state: PortfolioState) -> PortfolioState:
-    """2단계: 안정성 필터링 - 이번 목표의 핵심 게이트.
-
-    1) yfinance로 실제 베타/부채비율/연속 이익성장 데이터를 가져옵니다 (코드 실행).
-    2) 숫자 기준은 LLM 판단이 아니라 코드로 강제 필터링합니다 - 여기서 타협하면
-       "밸류에이션은 좋은데 변동성이 큰 종목"이 다음 단계로 새어 나갑니다.
-    3) 통과한 종목에 대해서만 Sonnet으로 짧은 근거 문장을 덧붙입니다.
-    """
+    """2단계: 안정성 필터링."""
     limits = state["limits"]
     tickers = [c["ticker"] for c in state["candidates"]]
 
     fetched, failed = fetch_fundamentals_batch(tickers)
-
-    import json
-    print("전체 조회 결과:", json.dumps(fetched, indent=2, ensure_ascii=False))
 
     passed: list[dict] = []
     audit: list[dict] = []
@@ -245,15 +191,12 @@ def stability_screener(state: PortfolioState) -> PortfolioState:
         if entry["passed"]:
             passed.append(entry)
 
-    # 데이터 조회 자체에 실패한 종목도 감사 기록에 남깁니다 (자동 탈락 처리).
     for ticker in failed:
         audit.append({
             "ticker": ticker, "beta": None, "debt_to_equity": None, "profit_growth_years": None,
             "passed": False, "failed_criteria": ["데이터 조회 실패"],
         })
 
-    # 통과 종목마다 짧은 근거를 생성합니다.
-    # 종목 수가 많아지면 비용 절감을 위해 여러 종목을 한 번의 호출로 묶는 걸 추천합니다.
     for stock in passed:
         try:
             result = call_llm(
@@ -274,10 +217,8 @@ def stability_screener(state: PortfolioState) -> PortfolioState:
             )
             stock["stability_rationale"] = result["rationale"]
         except Exception:
-            # LLM 근거 생성이 실패해도 필터링 결과 자체는 유지합니다.
             stock["stability_rationale"] = None
 
-    # audit에도 rationale을 동기화 (passed 리스트와 같은 dict 객체를 공유하므로 이미 반영됨)
     state["stable_candidates"] = passed
     state["stage2_audit"] = audit
     state["status"] = (
@@ -289,17 +230,10 @@ def stability_screener(state: PortfolioState) -> PortfolioState:
 
 
 def valuation_and_risk_analyst(state: PortfolioState) -> PortfolioState:
-    """3단계: 밸류에이션 스코어링 + 상관관계 기반 리스크 분석.
-
-    1) PER/PBR/PEG/ROE를 가져와 다중 팩터 점수(valuation_score)를 계산합니다.
-    2) 최근 1년 일별 수익률로 상관관계 매트릭스를 만들고, 상관계수가
-       correlation_ceiling 이상인 종목 쌍을 찾아둡니다 (배분 단계에서
-       "이 둘을 동시에 많이 담지 말라"는 근거로 씁니다).
-    """
+    """3단계: 밸류에이션 스코어링 + 상관관계 기반 리스크 분석."""
     stable = state["stable_candidates"]
     tickers = [c["ticker"] for c in stable]
 
-    # --- 밸류에이션 스코어링 ---
     valuation_metrics = fetch_valuation_batch(tickers)
     valuation_metrics = compute_valuation_scores(valuation_metrics)
     valuation_by_ticker = {m["ticker"]: m for m in valuation_metrics}
@@ -310,7 +244,6 @@ def valuation_and_risk_analyst(state: PortfolioState) -> PortfolioState:
         merged = {**c, **{k: val for k, val in v.items() if k != "ticker"}}
         scored.append(merged)
 
-    # --- 상관관계 기반 리스크 분석 ---
     high_corr_pairs: list[tuple[str, str, float]] = []
     if len(tickers) >= 2:
         try:
@@ -321,8 +254,6 @@ def valuation_and_risk_analyst(state: PortfolioState) -> PortfolioState:
                     corr, state["limits"]["correlation_ceiling"]
                 )
         except Exception:
-            # 가격 히스토리 조회 실패는 전체 파이프라인을 막을 정도는 아니므로
-            # 상관관계 분석만 건너뛰고 계속 진행합니다.
             high_corr_pairs = []
 
     for ticker_a, ticker_b, corr_value in high_corr_pairs:
@@ -343,13 +274,7 @@ def valuation_and_risk_analyst(state: PortfolioState) -> PortfolioState:
 
 
 def compute_weights(scored: list[dict], max_single_weight: float) -> list[dict]:
-    """valuation_score를 상대적 비중으로 변환하고 단일 종목 상한을 적용합니다.
-
-    - 종목이 1개뿐이면 비교 대상이 없으므로 상한값 그대로를 비중으로 씁니다
-      (실전에서는 min_holdings 게이트가 이 상황 자체를 막아줍니다).
-    - 점수가 높을수록 비중을 더 주되, 상한을 넘는 초과분은 나머지 종목에
-      비례 재분배합니다 (waterfall capping).
-    """
+    """valuation_score를 상대적 비중으로 변환하고 단일 종목 상한을 적용합니다."""
     n = len(scored)
     if n == 0:
         return scored
@@ -359,7 +284,6 @@ def compute_weights(scored: list[dict], max_single_weight: float) -> list[dict]:
 
     scores = {h["ticker"]: h.get("valuation_score", 0.0) for h in scored}
     min_score = min(scores.values())
-    # 전부 양수로 이동시켜서 비중 계산이 가능하게 함 (0.01은 최저점 종목도 소액은 배분받게 하는 여유값)
     shifted = {t: s - min_score + 0.01 for t, s in scores.items()}
     total = sum(shifted.values())
     weights = {t: v / total for t, v in shifted.items()}
@@ -386,19 +310,16 @@ def compute_weights(scored: list[dict], max_single_weight: float) -> list[dict]:
 
 
 def allocator_and_trade_planner(state: PortfolioState) -> PortfolioState:
-    """4단계: 비중 배분 + 분할 매수 계획. 비중 상한 규칙을 강제 적용."""
+    """4단계: 비중 배분 + 분할 매수 계획."""
     limits = state["limits"]
     portfolio = compute_weights(state["scored_candidates"], limits["max_single_stock_weight"])
 
     state["portfolio"] = portfolio
-    # TODO: call_llm(MODEL_MID, ...) 로 분할 매수(예: 3회 분할) 주문 초안 작성
     state["trade_plan"] = []
 
     invested_weight = sum(h["weight"] for h in portfolio)
     status = "4단계 완료: 포트폴리오 구성"
     if invested_weight < 0.99:
-        # 종목 수 × 단일 종목 상한 < 100% 인 경우 발생. 버그가 아니라
-        # "상한을 지키려면 이 종목 수로는 예산을 다 못 채운다"는 신호입니다.
         cash_pct = round((1 - invested_weight) * 100, 1)
         status += (
             f" (경고: 종목 수 부족으로 예산의 {cash_pct}%가 미배분 상태 - "
@@ -411,14 +332,7 @@ def allocator_and_trade_planner(state: PortfolioState) -> PortfolioState:
 
 
 def rebalancing_monitor(state: PortfolioState) -> PortfolioState:
-    """5단계: 정기 리밸런싱 + 손절 조건 체크.
-
-    - 손절 여부와 비중 이탈(drift) 판단은 LLM이 아니라 코드로 계산합니다.
-      가격 트리거를 LLM 판단에 맡기면 같은 숫자를 두고도 실행마다 다른 결론이
-      나올 수 있어서, 여기서는 숫자 계산은 100% 코드가 하고 Claude는 "왜"만 설명합니다.
-    - current_holdings가 비어 있으면(아직 실제로 아무것도 안 산 상태) 4단계에서 나온
-      목표 비중을 그대로 "최초 매수 계획"으로 돌려줍니다.
-    """
+    """5단계: 정기 리밸런싱 + 손절 조건 체크."""
     current_holdings = state.get("current_holdings") or []
     target_weights = {h["ticker"]: h["weight"] for h in state["portfolio"]}
 
@@ -443,7 +357,7 @@ def rebalancing_monitor(state: PortfolioState) -> PortfolioState:
         total_value += h["market_value"]
 
     stop_loss_pct = state["limits"]["stop_loss_pct"]
-    drift_threshold = 0.05  # 목표 비중과 5%포인트 이상 벌어지면 리밸런싱 대상으로 표시
+    drift_threshold = 0.05
 
     actions: list[dict] = []
     for h in current_holdings:
@@ -453,7 +367,6 @@ def rebalancing_monitor(state: PortfolioState) -> PortfolioState:
         drift = current_weight - target_weight
 
         if h["return_pct"] is not None and h["return_pct"] <= stop_loss_pct:
-            # 손절 조건이 비중 이탈보다 우선순위가 높습니다 - 리스크 신호가 더 급함
             actions.append({
                 "ticker": ticker,
                 "action": "stop_loss_review",
@@ -469,8 +382,6 @@ def rebalancing_monitor(state: PortfolioState) -> PortfolioState:
                 "drift": round(drift, 4),
             })
 
-    # 판단(숫자)은 이미 끝났으니, 각 액션에 대한 설명 한 줄만 Claude가 생성합니다.
-    import json as _json
     for action in actions:
         try:
             result = call_llm(
@@ -480,7 +391,7 @@ def rebalancing_monitor(state: PortfolioState) -> PortfolioState:
                     "이 조치가 왜 제안됐는지 한국어로 한두 문장으로 설명하라. "
                     "확정적인 예측이나 과장된 표현은 쓰지 마라."
                 ),
-                user_prompt=_json.dumps(action, ensure_ascii=False),
+                user_prompt=json.dumps(action, ensure_ascii=False),
                 json_schema=_RATIONALE_SCHEMA,
             )
             action["rationale"] = result["rationale"]
@@ -493,21 +404,11 @@ def rebalancing_monitor(state: PortfolioState) -> PortfolioState:
     return state
 
 
-# ---------------------------------------------------------------------------
-# 6. 조건부 게이트
-#    안정성 필터를 통과한 종목이 하나도 없으면 뒷단으로 넘어가지 않고 종료합니다.
-#    이게 "밸류에이션은 좋은데 변동성이 큰 종목"이 살아남는 걸 막는 하드 게이트입니다.
-# ---------------------------------------------------------------------------
-
 def stability_gate(state: PortfolioState) -> Literal["continue", "abort"]:
     if len(state["stable_candidates"]) < state["limits"]["min_holdings"]:
         return "abort"
     return "continue"
 
-
-# ---------------------------------------------------------------------------
-# 7. 그래프 조립
-# ---------------------------------------------------------------------------
 
 def build_graph():
     graph = StateGraph(PortfolioState)
@@ -526,7 +427,7 @@ def build_graph():
         stability_gate,
         {
             "continue": "valuation_risk",
-            "abort": END,  # 후보가 최소 종목 수에 못 미치면 여기서 중단
+            "abort": END,
         },
     )
 
@@ -536,10 +437,6 @@ def build_graph():
 
     return graph.compile()
 
-
-# ---------------------------------------------------------------------------
-# 8. 실행 예시
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     app = build_graph()
@@ -555,16 +452,11 @@ if __name__ == "__main__":
         "trade_plan": [],
         "current_holdings": [],
         "rebalance_actions": [],
+        "stage1_audit": [],
+        "stage2_audit": [],
         "status": "시작 전",
     }
 
     result = app.invoke(initial_state)
     print(result["status"])
     print(f"최종 포트폴리오 종목 수: {len(result['portfolio'])}")
-
-    import json
-    print(json.dumps(result["portfolio"], indent=2, ensure_ascii=False))
-
-    print()
-    print(f"리밸런싱/손절 제안 상세 ({len(result['rebalance_actions'])}건):")
-    print(json.dumps(result["rebalance_actions"], indent=2, ensure_ascii=False))
