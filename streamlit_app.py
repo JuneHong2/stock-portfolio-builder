@@ -5,7 +5,8 @@
     streamlit run streamlit_app.py
 
 (로컬 venv 안에서, ANTHROPIC_API_KEY 환경변수가 설정된 상태로 실행하세요.
- orchestration.py, llm_client.py, data_sources.py와 같은 폴더에 둬야 합니다.)
+ orchestration.py, llm_client.py, data_sources.py, snaptrade_holdings.py와
+ 같은 폴더에 둬야 합니다.)
 """
 
 import pandas as pd
@@ -69,7 +70,6 @@ h1, h2, h3 {
     margin: 0.9rem 0 0.4rem 0;
 }
 
-/* 숫자 지표는 고정폭 폰트로 - 데이터 터미널 느낌 */
 [data-testid="stMetricValue"] {
     font-family: 'IBM Plex Mono', monospace !important;
     color: #E8E8F5 !important;
@@ -78,7 +78,6 @@ h1, h2, h3 {
     color: #8A8AA3 !important;
 }
 
-/* 기본 CTA 버튼 - 유일하게 강조색을 쓰는 지점 */
 [data-testid="stBaseButton-primary"] {
     background: linear-gradient(135deg, #7C6FFF 0%, #4EA1FF 100%) !important;
     border: none !important;
@@ -92,7 +91,6 @@ h1, h2, h3 {
     transform: translateY(-1px);
 }
 
-/* 카드(테두리 있는 container)와 expander를 같은 톤으로 통일 */
 [data-testid="stExpander"] {
     border: 1px solid rgba(124,111,255,0.14) !important;
     border-radius: 10px !important;
@@ -113,11 +111,7 @@ hr {
 
 
 def _check_password() -> bool:
-    """온라인에 배포했을 때 아무나 못 누르게 막는 간단한 비밀번호 게이트.
-
-    Streamlit Cloud의 Secrets에 APP_PASSWORD를 설정하면 그때부터 활성화됩니다.
-    로컬 컴퓨터에서 그냥 실행할 때는 secrets 자체가 없으니 이 게이트를 건너뜁니다.
-    """
+    """온라인에 배포했을 때 아무나 못 누르게 막는 간단한 비밀번호 게이트."""
     try:
         password_required = "APP_PASSWORD" in st.secrets
     except Exception:
@@ -184,6 +178,34 @@ with st.container(border=True):
     st.caption("한 번 실행에 웹 검색 + LLM 호출 비용이 발생합니다 (보통 몇 센트~수십 센트 수준).")
 
 
+# ─────────────────────────────────────────────────────────────
+# 실제 보유 종목 - SnapTrade(Wealthsimple) 연동
+# ─────────────────────────────────────────────────────────────
+if "current_holdings" not in st.session_state:
+    st.session_state.current_holdings = []
+
+with st.container(border=True):
+    st.markdown('<div class="section-label">MY HOLDINGS (WEALTHSIMPLE)</div>', unsafe_allow_html=True)
+    st.caption("SnapTrade로 연결한 실제 계좌에서 보유 종목을 불러와 손절/리밸런싱 판단에 사용합니다.")
+    load_holdings_button = st.button("실제 계좌에서 불러오기", width="stretch")
+
+    if load_holdings_button:
+        try:
+            from snaptrade_holdings import fetch_wealthsimple_holdings
+            with st.spinner("SnapTrade에서 보유 종목을 가져오는 중..."):
+                st.session_state.current_holdings = fetch_wealthsimple_holdings()
+            st.success(f"{len(st.session_state.current_holdings)}개 포지션을 불러왔습니다.")
+        except Exception as e:
+            st.error(f"불러오기 실패: {e}")
+
+    if st.session_state.current_holdings:
+        st.dataframe(
+            pd.DataFrame(st.session_state.current_holdings),
+            width="stretch",
+            hide_index=True,
+        )
+
+
 if "result" not in st.session_state:
     st.session_state.result = None
 
@@ -206,7 +228,7 @@ if run_button:
         "scored_candidates": [],
         "portfolio": [],
         "trade_plan": [],
-        "current_holdings": [],
+        "current_holdings": st.session_state.current_holdings,
         "rebalance_actions": [],
         "stage1_audit": [],
         "stage2_audit": [],
